@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Dict, List
+from typing import Any, Dict, List, Mapping, cast
 
 import streamlit as st
+from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 # ---------- Configuration ----------
 PHONEBOOK_JSON_FILENAME = "orig_texas_phonebook.json"
@@ -28,7 +29,7 @@ def init_state() -> None:
         None
     """
     if "phonebook" not in st.session_state:
-        phonebook = upload_json_file(PHONEBOOK_JSON_FILENAME)
+        phonebook = upload_json_from_file(PHONEBOOK_JSON_FILENAME)
         if phonebook:
             st.session_state.phonebook = phonebook
             logger.info("Loaded phonebook from JSON file.")
@@ -81,7 +82,7 @@ def set_mode(new_mode: str) -> None:
     st.session_state.mode = new_mode
 
 
-def as_table(data: Dict[str, Dict[str, str]]) -> List[Dict[str, str]]:
+def as_table(data: Dict[str, dict[str, str]]) -> List[Dict[str, str]]:
     """
     Convert dict representation to a list of rows for display.
 
@@ -144,7 +145,46 @@ def is_valid_phone(value: str) -> bool:
     return re.match(r"^[\d\s\-\+\(\)]+$", value) is not None
 
 
-def upload_json_file(filename: str | None = None) -> dict:
+def upload_json_file_from_ob(
+    filename: UploadedFile | None,
+) -> dict[str, dict[str, str]] | None:
+    """
+    Loads and validates a JSON file as a phonebook dict. Returns dict or None if invalid.
+
+    Args:
+        filename (UploadedFile | None): Streamlit file object.
+
+    Returns:
+        dict: Validated phonebook dict, or None if file is missing/invalid.
+    """
+    if not filename:
+        return None
+
+    try:
+        loaded_any: Any = json.load(filename)
+        if isinstance(loaded_any, dict):
+            loaded_dict = cast(dict[Any, Any], loaded_any)
+
+            ok = all(
+                isinstance(k, str)
+                and isinstance(v, dict)
+                and all(
+                    isinstance(subv, str)
+                    for subv in cast(Mapping[str, Any], v).values()
+                )
+                for k, v in loaded_dict.items()
+            )
+
+            if ok:
+                logger.info("JSON file from object uploaded and validated.")
+                return cast(dict[str, dict[str, str]], loaded_dict)
+
+    except (json.JSONDecodeError, TypeError) as e:
+        logger.error("Failed to load JSON from object: %s", e)
+    return None
+
+
+def upload_json_from_file(filename: str) -> dict[str, dict[str, str]] | None:
     """
     Loads and validates a JSON file as a phonebook dict. Returns dict or None if invalid.
 
@@ -157,16 +197,25 @@ def upload_json_file(filename: str | None = None) -> dict:
     if not filename:
         return None
     try:
-        # If filename is a file-like object (from st.file_uploader), use it directly
-        if hasattr(filename, "read"):
-            loaded = json.load(filename)
-        else:
-            with open(filename, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-        if isinstance(loaded, dict) and all(
-            isinstance(k, str) and isinstance(v, dict) for k, v in loaded.items()
-        ):
-            return loaded
+        with open(filename, "r", encoding="utf-8") as f:
+            loaded_any = json.load(f)
+        if isinstance(loaded_any, dict):
+            loaded_dict = cast(dict[Any, Any], loaded_any)
+
+            ok = all(
+                isinstance(k, str)
+                and isinstance(v, dict)
+                and all(
+                    isinstance(subv, str)
+                    for subv in cast(Mapping[str, Any], v).values()
+                )
+                for k, v in loaded_dict.items()
+            )
+
+            if ok:
+                logger.info("JSON file from object uploaded and validated.")
+                return cast(dict[str, dict[str, str]], loaded_dict)
+
     except Exception:
         pass
     return None
@@ -219,8 +268,9 @@ def Phonebook_main() -> None:
                 st.error(f"Failed to save phonebook: {e}")
 
         uploaded = st.file_uploader("⬆️  Import JSON", type=["json"])
+        logger.info("Uploded variable type: %s", type(uploaded))
         if uploaded is not None:
-            phonebook = upload_json_file(uploaded)
+            phonebook = upload_json_file_from_ob(uploaded)
             if phonebook:
                 st.session_state.phonebook = phonebook
                 st.success("Imported phonebook.")
@@ -243,7 +293,7 @@ def Phonebook_main() -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "Name": st.column_config.TextColumn(required=True),
+                "Name": st.column_config.TextColumn(),
                 "Phone_number": st.column_config.TextColumn(
                     help="e.g. +1 202 555 0123"
                 ),
